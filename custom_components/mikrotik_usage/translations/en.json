@@ -3,16 +3,19 @@
     "step": {
       "user": {
         "title": "Choose devices to track",
-        "description": "These traffic sensors were found in Home Assistant (MikroTik ones first). Pick the devices you want usage statistics for.",
+        "description": "Found {found} devices/ports with TX/RX traffic sensors (throughput such as kb/s, or cumulative totals such as GB). {hint}Data used is reconstructed from kb/s sensors by integrating over time. If a device is missing, add it manually below by picking its RX and TX sensors.",
         "data": {
-          "devices": "Devices"
+          "devices": "Detected devices",
+          "manual_name": "Manual device name (optional)",
+          "manual_rx": "Manual RX sensor (optional)",
+          "manual_tx": "Manual TX sensor (optional)"
         }
       },
       "settings": {
         "title": "Statistics",
-        "description": "Choose which periods to keep. Pick your Home Assistant host (optional) so service estimates can be compared with its real traffic.",
         "data": {
           "periods": "Periods",
+          "prefer_rate": "Prefer throughput (kb/s) sensors over totals when both exist",
           "swap_direction": "Swap RX/TX (use if download shows as TX)",
           "estimate_services": "Estimate Home Assistant service data usage",
           "ha_host": "Device that is your Home Assistant host"
@@ -20,25 +23,29 @@
       }
     },
     "error": {
-      "no_devices": "Select at least one device."
+      "no_devices": "Select or add at least one device."
     },
     "abort": {
-      "already_configured": "Already configured.",
-      "no_candidates": "No TX/RX traffic sensors were found. In MikroTik Extended enable the 'client traffic' sensors (and the per-client option), then try again."
+      "already_configured": "Already configured."
     }
   },
   "options": {
     "step": {
       "init": {
         "title": "Devices to track",
+        "description": "Found {found} devices/ports with TX/RX traffic sensors (throughput such as kb/s, or cumulative totals such as GB). {hint}Data used is reconstructed from kb/s sensors by integrating over time. If a device is missing, add it manually below by picking its RX and TX sensors.",
         "data": {
-          "devices": "Devices"
+          "devices": "Detected devices",
+          "manual_name": "Manual device name (optional)",
+          "manual_rx": "Manual RX sensor (optional)",
+          "manual_tx": "Manual TX sensor (optional)"
         }
       },
       "settings": {
         "title": "Statistics",
         "data": {
           "periods": "Periods",
+          "prefer_rate": "Prefer throughput (kb/s) sensors over totals when both exist",
           "swap_direction": "Swap RX/TX (use if download shows as TX)",
           "estimate_services": "Estimate Home Assistant service data usage",
           "ha_host": "Device that is your Home Assistant host"
@@ -46,7 +53,7 @@
       }
     },
     "error": {
-      "no_devices": "Select at least one device."
+      "no_devices": "Select or add at least one device."
     }
   },
   "selector": {

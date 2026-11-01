@@ -10,6 +10,7 @@ All volumes are stored in BYTES.  Two source types are supported:
 
 from __future__ import annotations
 
+import re
 from datetime import datetime
 from typing import Any
 
@@ -17,29 +18,50 @@ PERIODS = ("day", "month", "year")
 MAX_GAP_S = 600  # do not integrate rates across gaps longer than this
 HISTORY_DAYS = 400
 
-DATA_UNITS: dict[str, float] = {
-    "bit": 1 / 8, "kbit": 125.0, "Mbit": 125e3, "Gbit": 125e6,
-    "B": 1.0, "kB": 1e3, "KB": 1e3, "MB": 1e6, "GB": 1e9, "TB": 1e12, "PB": 1e15,
-    "KiB": 1024.0, "MiB": 1024.0**2, "GiB": 1024.0**3, "TiB": 1024.0**4,
-}
-RATE_UNITS: dict[str, float] = {
-    "bit/s": 1 / 8, "kbit/s": 125.0, "Mbit/s": 125e3, "Gbit/s": 125e6,
-    "bps": 1 / 8, "kbps": 125.0, "Kbps": 125.0, "Mbps": 125e3, "Gbps": 125e6,
-    "kb/s": 125.0, "Mb/s": 125e3, "Gb/s": 125e6,
-    "B/s": 1.0, "kB/s": 1e3, "KB/s": 1e3, "MB/s": 1e6, "GB/s": 1e9,
-    "KiB/s": 1024.0, "MiB/s": 1024.0**2, "GiB/s": 1024.0**3,
-}
+_PREFIX = {"": 1.0, "k": 1e3, "m": 1e6, "g": 1e9, "t": 1e12, "p": 1e15}
+_UNIT_RE = re.compile(r"^([kKmMgGtTpP]?)(i?)(bits?|bytes?|b|B)\s*(/s|ps|/sec|/second)?$")
 
 
 def classify_unit(unit: str | None) -> tuple[str, float] | None:
-    """Return ("rate"|"counter", bytes-factor) for a unit string, else None."""
+    """Parse any reasonable data unit -> ("rate"|"counter", bytes factor).
+
+    Handles bit/byte via case (kbps, Kb/s, kbit/s = bits; kB/s, KBps, MB = bytes),
+    SI and IEC prefixes, and "per second" suffixes.  Returns None if not a data unit.
+    """
     if not unit:
         return None
-    u = unit.strip()
-    if u in RATE_UNITS:
-        return "rate", RATE_UNITS[u]
-    if u in DATA_UNITS:
-        return "counter", DATA_UNITS[u]
+    m = _UNIT_RE.match(unit.strip())
+    if not m:
+        return None
+    pre, iec, base, per_s = m.groups()
+    mult = _PREFIX[pre.lower()]
+    if iec:
+        mult = 1024.0 ** "kmgtp".index(pre.lower()) * 1024.0 if pre else 1.0
+    is_bytes = base[0] == "B" or base.lower().startswith("byte")
+    factor = mult * (1.0 if is_bytes else 1 / 8)
+    return ("rate" if per_s else "counter"), factor
+
+
+_DIR = {"tx": "tx", "rx": "rx", "transmit": "tx", "transmitted": "tx", "upload": "tx",
+        "uploaded": "tx", "receive": "rx", "received": "rx", "download": "rx",
+        "downloaded": "rx"}
+_NOISE = {"total", "rate", "speed", "traffic", "bandwidth", "throughput", "usage", "bytes", "kbps",
+          "mbps", "bps", "data"}
+_SPLIT = re.compile(r"[\s_\-./]+")
+_CAMEL = re.compile(r"(?<=[a-z])(?=[A-Z])")
+
+
+def split_direction(text: str | None) -> tuple[str, str] | None:
+    """"John iPhone TX rate" -> ("tx", "John iPhone").  None if no direction word."""
+    if not text:
+        return None
+    for candidate in (text, _CAMEL.sub(" ", text)):
+        toks = [t for t in _SPLIT.split(candidate) if t]
+        for i in range(len(toks) - 1, -1, -1):
+            d = _DIR.get(toks[i].lower())
+            if d:
+                rest = toks[:i] + [t for t in toks[i + 1:] if t.lower() not in _NOISE]
+                return d, " ".join(rest).strip()
     return None
 
 

@@ -17,9 +17,18 @@ In MikroTik Extended, enable the per-client traffic sensors (client traffic / ac
 Onboarding lists every `…TX` / `…RX` sensor pair it finds (MikroTik ones first). If none are
 found the setup tells you so.
 
+## A device isn't listed?
+1. Disabled sensors don't show up: Settings → Devices & services → Entities → filter *Disabled*,
+   search `tx`/`rx`, enable them (setup tells you how many disabled MikroTik TX/RX sensors exist).
+2. Add it manually in the setup dialog: pick its RX and TX sensor (e.g. the kb/s ones) and a name.
+3. Diagnose with Developer tools → Template:
+   `{{ states.sensor | selectattr('attributes.unit_of_measurement','in',['kbps','kb/s','kbit/s','Mbps','kB/s','B/s','bps']) | map(attribute='entity_id') | list }}`
+
 ## How numbers are computed
 * **Rate sensors** (bps, Mbps, B/s…) are integrated over time (trapezoid, sampled every 30 s
   and on every state change; gaps over 10 min are not interpolated).
+* If a device has both kinds, the cumulative counter is used (exact) unless you tick *Prefer throughput*.
+  Rate-based totals are only as precise as the sensor's update interval (MikroTik Extended: scan interval).
 * **Counter sensors** (B, MB, GB…) are accumulated as deltas; a decrease is treated as a
   counter reset (e.g. a counter that zeroes every midnight).
 * Day / month / year totals roll over at local midnight and persist across restarts.

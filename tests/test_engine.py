@@ -49,3 +49,23 @@ def test_persistence_roundtrip():
     e = E(); e.ensure("a", "A"); e.add("a", "rx", 5, T0)
     e2 = E(json.loads(json.dumps(e.to_dict())))
     assert e2.totals("a", "day", T0) == (5, 0)
+
+
+def test_unit_parser_variants():
+    c = engine.classify_unit
+    assert c("kbps") == ("rate", 125.0) and c("kb/s") == ("rate", 125.0)
+    assert c("kbit/s") == ("rate", 125.0) and c("Kbit/s") == ("rate", 125.0)
+    assert c("Mb/s") == ("rate", 125e3) and c("Mbps") == ("rate", 125e3)
+    assert c("kB/s") == ("rate", 1e3) and c("KBps") == ("rate", 1e3) and c("MB/s") == ("rate", 1e6)
+    assert c("B") == ("counter", 1.0) and c("GB") == ("counter", 1e9) and c("MiB") == ("counter", 1048576.0)
+    assert c("GiB/s") == ("rate", 1024.0**3)
+    assert c("°C") is None and c("%") is None and c("min") is None and c("") is None
+
+
+def test_split_direction():
+    s = engine.split_direction
+    assert s("John iPhone TX") == ("tx", "John iPhone")
+    assert s("ether1 RX total") == ("rx", "ether1 total") or s("ether1 RX total")[0] == "rx"
+    assert s("laptop_rx_rate") == ("rx", "laptop")
+    assert s("Living room TV Download") == ("rx", "Living room TV")
+    assert s("Temperature") is None

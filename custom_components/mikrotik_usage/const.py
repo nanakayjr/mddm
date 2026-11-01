@@ -7,6 +7,7 @@ CONF_PERIODS = "periods"
 CONF_SWAP = "swap_direction"
 CONF_HA_HOST = "ha_host"
 CONF_ESTIMATE = "estimate_services"
+CONF_PREFER_RATE = "prefer_rate"
 
 PERIODS = ("day", "month", "year")
 PERIOD_LABEL = {"day": "Today", "month": "This month", "year": "This year"}
