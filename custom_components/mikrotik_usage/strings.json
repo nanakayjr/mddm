@@ -1,0 +1,61 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Choose devices to track",
+        "description": "These traffic sensors were found in Home Assistant (MikroTik ones first). Pick the devices you want usage statistics for.",
+        "data": {
+          "devices": "Devices"
+        }
+      },
+      "settings": {
+        "title": "Statistics",
+        "description": "Choose which periods to keep. Pick your Home Assistant host (optional) so service estimates can be compared with its real traffic.",
+        "data": {
+          "periods": "Periods",
+          "swap_direction": "Swap RX/TX (use if download shows as TX)",
+          "estimate_services": "Estimate Home Assistant service data usage",
+          "ha_host": "Device that is your Home Assistant host"
+        }
+      }
+    },
+    "error": {
+      "no_devices": "Select at least one device."
+    },
+    "abort": {
+      "already_configured": "Already configured.",
+      "no_candidates": "No TX/RX traffic sensors were found. In MikroTik Extended enable the 'client traffic' sensors (and the per-client option), then try again."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Devices to track",
+        "data": {
+          "devices": "Devices"
+        }
+      },
+      "settings": {
+        "title": "Statistics",
+        "data": {
+          "periods": "Periods",
+          "swap_direction": "Swap RX/TX (use if download shows as TX)",
+          "estimate_services": "Estimate Home Assistant service data usage",
+          "ha_host": "Device that is your Home Assistant host"
+        }
+      }
+    },
+    "error": {
+      "no_devices": "Select at least one device."
+    }
+  },
+  "selector": {
+    "periods": {
+      "options": {
+        "day": "Daily",
+        "month": "Monthly",
+        "year": "Yearly"
+      }
+    }
+  }
+}

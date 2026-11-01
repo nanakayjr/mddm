@@ -1,0 +1,14 @@
+{
+  "domain": "mikrotik_usage",
+  "name": "Mikrotik Data Usage",
+  "version": "0.1.0",
+  "documentation": "https://github.com/YOUR_USER/hass-mikrotik-usage",
+  "issue_tracker": "https://github.com/YOUR_USER/hass-mikrotik-usage/issues",
+  "codeowners": ["@YOUR_USER"],
+  "config_flow": true,
+  "dependencies": ["http", "panel_custom", "websocket_api"],
+  "after_dependencies": ["mikrotik_extended", "mikrotik_router"],
+  "integration_type": "service",
+  "iot_class": "calculated",
+  "requirements": []
+}
