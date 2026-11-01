@@ -19,7 +19,7 @@ from .const import (CONF_DEVICES, CONF_ESTIMATE, CONF_HA_HOST, CONF_PERIODS, CON
                     DOMAIN, ESTIMATE_REFRESH_S, PERIODS, SCAN_SECONDS)
 from .addons import AddonTracker, supervisor_available
 from .engine import Engine, classify_unit
-from .estimator import estimate_services
+from .estimator import async_estimate_services
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -79,6 +79,11 @@ class UsageCoordinator(DataUpdateCoordinator[None]):
     async def _async_update_data(self) -> None:
         self._sample()
         self._store.async_delay_save(self.engine.to_dict, SCAN_SECONDS // 2)
+        if self.estimate_enabled and time.monotonic() - self._est_ts > ESTIMATE_REFRESH_S:
+            measured = {d["key"]: {"day": sum(self.totals(d["key"], "day")),
+                                   "month": sum(self.totals(d["key"], "month"))} for d in self.devices}
+            self._est_rows = await async_estimate_services(self.hass, self.devices, measured)
+            self._est_ts = time.monotonic()
         if self.addons is not None and time.monotonic() - self._addon_ts >= 55:
             self._addon_ts = time.monotonic()
             await self.addons.async_update(dt_util.now())
@@ -134,13 +139,6 @@ class UsageCoordinator(DataUpdateCoordinator[None]):
 
     def services(self) -> dict[str, Any]:
         now = dt_util.now()
-        if self.estimate_enabled and time.monotonic() - self._est_ts > ESTIMATE_REFRESH_S:
-            measured = {}
-            for d in self.devices:
-                measured[d["key"]] = {"day": sum(self.totals(d["key"], "day")),
-                                      "month": sum(self.totals(d["key"], "month"))}
-            self._est_rows = estimate_services(self.hass, self.devices, measured)
-            self._est_ts = time.monotonic()
         host = None
         if self.ha_host and self.ha_host in self.engine.devices:
             host = {"name": self.engine.devices[self.ha_host]["name"],
@@ -148,8 +146,9 @@ class UsageCoordinator(DataUpdateCoordinator[None]):
                     "month": sum(self.totals(self.ha_host, "month"))}
         addon_day = sum(r["total"] for r in self.addon_ranking("day")) if self.addons else 0.0
         addon_month = sum(r["total"] for r in self.addon_ranking("month")) if self.addons else 0.0
-        est_day = sum(r["day"] or 0 for r in self._est_rows if r["mode"] != "measured")
-        est_month = sum(r["month"] or 0 for r in self._est_rows if r["mode"] != "measured")
+        internet = [r for r in self._est_rows if r["scope"] == "internet" and r["mode"] != "measured"]
+        est_day = sum(r["day"] or 0 for r in internet)
+        est_month = sum(r["month"] or 0 for r in internet)
         return {"rows": self._est_rows, "host": host, "est_day": est_day,
                 "est_month": est_month, "addon_day": addon_day,
                 "addon_month": addon_month, "as_of": now.isoformat()}

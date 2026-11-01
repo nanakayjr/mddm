@@ -55,8 +55,9 @@ Home Assistant has no per-integration byte counters. Each integration is labelle
 | Label | Meaning |
 |---|---|
 | Measured | Its host is a device you track → real router counters (split evenly if several integrations share it) |
-| Estimated | Cloud/polling: polls per day (from the coordinator interval when found) × typical payload |
-| LAN estimate | Local host that you don't track; same estimate |
+| Estimated | Internet-facing (`cloud_*` iot_class): polls per day (from the coordinator interval when found) × typical payload |
+| Local network | `local_*` integrations: measured if tracked, otherwise a polling estimate, or no estimate for local push. Hidden by default, tick the checkbox to show |
+| Hidden | Zigbee, Z-Wave, Bluetooth, Thread, helpers, calculated: no IP traffic |
 | Not estimable | Streaming/media/camera/voice – depends on use |
 
 Choose your HA host in the settings to see *estimate vs. measured vs. everything else*

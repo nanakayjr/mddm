@@ -4,7 +4,8 @@ const PERIODS = { day: "Today", month: "This month", year: "This year" };
 const MODES = {
   measured:  ["Measured", "Real router counters of the LAN device this integration talks to"],
   estimated: ["Estimated", "Cloud integration: polls per day x typical payload"],
-  lan:       ["LAN estimate", "Local device that is not tracked; estimated from polling"],
+  lan:       ["LAN estimate", "Stays on your local network; estimated from polling"],
+  lan_push:  ["Local, no estimate", "Local push device: only sends on change, negligible and not estimated"],
   unmodelled:["Not estimable", "Streaming / media / camera: depends on use"],
 };
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -68,6 +69,7 @@ td{padding:8px;border-bottom:1px solid var(--line);font-variant-numeric:tabular-
 th.n,td.n{text-align:right}
 .tag{font-size:12px;padding:2px 9px;border-radius:999px;background:var(--secondary-background-color);color:var(--mute);white-space:nowrap}
 .tag.measured{background:color-mix(in srgb,var(--rx) 18%,transparent);color:var(--primary-text-color)}
+.chk{display:flex;gap:8px;align-items:center;font-size:13px;color:var(--mute);margin:0 0 12px;cursor:pointer}
 .scroll{overflow-x:auto}.note{color:var(--mute);font-size:12.5px;margin:14px 0 0;max-width:70ch}
 .empty{padding:40px 12px;text-align:center;color:var(--mute)}
 `;
@@ -76,9 +78,10 @@ class MikrotikUsagePanel extends HTMLElement {
   constructor() {
     super();
     this.attachShadow({ mode: "open" });
-    this._period = null; this._sel = null; this._hist = null; this._histKey = ""; this._histTs = 0; this._raf = 0;
+    this._period = null; this._sel = null; this._lan = false; this._hist = null; this._histKey = ""; this._histTs = 0; this._raf = 0;
     this.shadowRoot.innerHTML = `<style>${CSS}</style><div id="app"></div>`;
     this.shadowRoot.addEventListener("click", (e) => {
+      if (e.target.id === "lan") { this._lan = e.target.checked; this._render(); return; }
       const t = e.target.closest("[data-period],[data-key],.menu"); if (!t) return;
       if (t.classList.contains("menu")) this.dispatchEvent(new Event("hass-toggle-menu", { bubbles: true, composed: true }));
       else if (t.dataset.period) { this._period = t.dataset.period; this._render(); }
@@ -206,24 +209,27 @@ class MikrotikUsagePanel extends HTMLElement {
 
   _services(s, p) {
     const key = p === "day" ? "day" : "month";
-    const rows = (s.rows || []).filter((r) => r.mode !== "lan" || r[key] > 0 || r.mode === "lan");
+    const all = s.rows || [];
+    const rows = all.filter((r) => r.scope === "internet" || this._lan);
+    const nLan = all.filter((r) => r.scope !== "internet").length;
     const host = s.host, est = key === "day" ? s.est_day : s.est_month;
     const addon = key === "day" ? (s.addon_day || 0) : (s.addon_month || 0);
     const hostV = host ? host[key] : null;
     const label = key === "day" ? "today" : "this month";
     const cmp = `<div class="cmp">
-      <div><b>${fmt(est)}</b><span>estimated for services ${label}</span></div>
+      <div><b>${fmt(est)}</b><span>estimated for internet integrations ${label}</span></div>
       ${host ? `<div><b>${fmt(hostV)}</b><span>measured for ${esc(host.name)}</span></div>
       <div><b>${fmt(addon)}</b><span>add-ons (measured)</span></div>
       <div><b>${fmt(Math.max(0, hostV - est - addon))}</b><span>everything else (updates, backups, media…)</span></div>` : ""}</div>`;
-    return `<section class="svc"><h2>Home Assistant services</h2>
-      <p class="sub">Estimated data demand per integration (${key === "day" ? "per day" : "per month"})</p>${cmp}
+    return `<section class="svc"><h2>Home Assistant integrations</h2>
+      <p class="sub">Estimated data demand per integration (${key === "day" ? "per day" : "per month"}). Internet-facing integrations only by default.</p>${cmp}
+      ${nLan ? `<label class="chk"><input type="checkbox" id="lan" ${this._lan ? "checked" : ""}> Also show ${nLan} local-network integration${nLan > 1 ? "s" : ""} (traffic stays inside your network)</label>` : ""}
       <div class="scroll"><table><thead><tr><th>Integration</th><th>Method</th><th class="n">Polls / day</th><th class="n">${key === "day" ? "Day" : "Month"}</th></tr></thead><tbody>
-      ${rows.map((r) => { const m = MODES[r.mode] || [r.mode, ""]; return `<tr><td>${esc(r.title)}${r.host ? `<div class="pct">${esc(r.host)}</div>` : ""}</td>
+      ${rows.map((r) => { const m = MODES[r.mode] || [r.mode, ""]; return `<tr><td>${esc(r.name)}${r.entries > 1 ? `<div class="pct">${r.entries} entries</div>` : ""}${r.scope !== "internet" ? `<div class="pct">local network</div>` : ""}</td>
         <td><span class="tag ${esc(r.mode)}" title="${esc(m[1])}">${m[0]}</span></td>
-        <td class="n">${r.polls_per_day ?? "–"}</td><td class="n">${fmt(r[key])}</td></tr>`; }).join("")}
+        <td class="n">${r.polls_per_day ?? "–"}</td><td class="n">${fmt(r[key])}</td></tr>`; }).join("") || `<tr><td colspan="4" class="empty">No internet-facing integrations found.</td></tr>`}
       </tbody></table></div>
-      <p class="note">${esc(s.note || "")} Home Assistant exposes no per-integration traffic counters, so estimated rows are indicative only; measured rows come from your router.</p></section>`;
+      <p class="note">Home Assistant exposes no per-integration traffic counters, so estimated rows are indicative only; measured rows come from your router. Radio-only integrations (Zigbee, Z-Wave, Bluetooth) and helpers generate no network traffic and are not listed.</p></section>`;
   }
 }
 customElements.define("mikrotik-usage-panel", MikrotikUsagePanel);
