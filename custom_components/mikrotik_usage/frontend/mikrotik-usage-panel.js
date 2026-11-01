@@ -49,6 +49,7 @@ svg text{fill:var(--mute);font-size:11px}
 .row{display:grid;grid-template-columns:minmax(90px,170px) 1fr 84px;gap:12px;align-items:center;padding:7px 8px;margin:0 -8px;
   border-radius:8px;cursor:pointer;font-size:14px}
 .row:hover{background:var(--secondary-background-color)}
+.row.static{cursor:default}.row.static:hover{background:none}
 .row[aria-selected=true]{background:var(--secondary-background-color);box-shadow:inset 3px 0 0 var(--primary-color)}
 .name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .pct{color:var(--mute);font-size:12px}
@@ -95,13 +96,14 @@ class MikrotikUsagePanel extends HTMLElement {
   }
 
   _data() {
-    const out = { ranking: {}, network: {}, services: null, entry: null };
+    const out = { ranking: {}, network: {}, addons: {}, services: null, entry: null };
     for (const s of Object.values(this._hass.states)) {
       const a = s.attributes || {};
       if (!a.mu_kind) continue;
       out.entry = a.mu_entry;
       if (a.mu_kind === "ranking") out.ranking[a.period] = a;
       else if (a.mu_kind === "network") out.network[a.period] = a;
+      else if (a.mu_kind === "addons") out.addons[a.period] = a;
       else if (a.mu_kind === "services") out.services = a;
     }
     return out;
@@ -151,15 +153,33 @@ class MikrotikUsagePanel extends HTMLElement {
         <div id="chart">${this._chart()}</div></section>
       <section class="rank"><h2>Devices by usage</h2><p class="sub">Click a device to see its daily history</p>
         ${items.length ? `<div class="axis"><div></div><div><span style="color:${RX}">&larr; RX</span><span style="color:${TX}">TX &rarr;</span></div><div></div></div>` : ""}
-        ${items.map((i) => `<div class="row" role="button" tabindex="0" data-key="${esc(i.key)}" aria-selected="${i.key === this._sel}"
-            title="RX ${fmt(i.rx)} / TX ${fmt(i.tx)}">
-          <div class="name">${esc(i.name)}</div>
-          <div class="bars"><div class="l"><i style="width:${(i.rx / maxSide) * 100}%"></i></div><div class="ax"></div>
-            <div class="r"><i style="width:${(i.tx / maxSide) * 100}%"></i></div></div>
-          <div class="val">${fmt(i.total)}<div class="pct">${i.share}%</div></div></div>`).join("")}
+        ${this._rows(items, maxSide, true)}
       </section>
+      ${this._addons(d.addons[p], p)}
       ${d.services ? this._services(d.services, p) : ""}</main>`;
     if (d.entry) this._loadHistory(d.entry);
+  }
+
+  _rows(items, maxSide, selectable) {
+    return items.map((i) => `<div class="row${selectable ? "" : " static"}" ${selectable ? `role="button" tabindex="0" data-key="${esc(i.key)}" aria-selected="${i.key === this._sel}"` : ""}
+        title="RX ${fmt(i.rx)} / TX ${fmt(i.tx)}">
+      <div class="name">${esc(i.name)}</div>
+      <div class="bars"><div class="l"><i style="width:${(i.rx / maxSide) * 100}%"></i></div><div class="ax"></div>
+        <div class="r"><i style="width:${(i.tx / maxSide) * 100}%"></i></div></div>
+      <div class="val">${fmt(i.total)}<div class="pct">${i.share}%</div></div></div>`).join("");
+  }
+
+  _addons(a, p) {
+    if (!a) return "";
+    const items = (a.items || []).filter((i) => i.total > 0);
+    const maxSide = Math.max(1, ...items.map((i) => Math.max(i.rx, i.tx)));
+    const ex = a.excluded || [];
+    return `<section class="rank"><h2>Add-ons (apps) by usage</h2>
+      <p class="sub">${PERIODS[p]} &middot; measured from each add-on container's network counters (LAN and internet)</p>
+      ${items.length ? `<div class="axis"><div></div><div><span style="color:${RX}">&larr; RX</span><span style="color:${TX}">TX &rarr;</span></div><div></div></div>${this._rows(items, maxSide, false)}`
+        : `<div class="empty">No add-on traffic recorded yet for this period.</div>`}
+      ${ex.length ? `<p class="note">Not ranked, because they use the host network and report whole-host counters: ${ex.map(esc).join(", ")}.</p>` : ""}
+    </section>`;
   }
 
   _chart() {
@@ -188,12 +208,14 @@ class MikrotikUsagePanel extends HTMLElement {
     const key = p === "day" ? "day" : "month";
     const rows = (s.rows || []).filter((r) => r.mode !== "lan" || r[key] > 0 || r.mode === "lan");
     const host = s.host, est = key === "day" ? s.est_day : s.est_month;
+    const addon = key === "day" ? (s.addon_day || 0) : (s.addon_month || 0);
     const hostV = host ? host[key] : null;
     const label = key === "day" ? "today" : "this month";
     const cmp = `<div class="cmp">
       <div><b>${fmt(est)}</b><span>estimated for services ${label}</span></div>
       ${host ? `<div><b>${fmt(hostV)}</b><span>measured for ${esc(host.name)}</span></div>
-      <div><b>${fmt(Math.max(0, hostV - est))}</b><span>everything else (updates, add-ons, backups…)</span></div>` : ""}</div>`;
+      <div><b>${fmt(addon)}</b><span>add-ons (measured)</span></div>
+      <div><b>${fmt(Math.max(0, hostV - est - addon))}</b><span>everything else (updates, backups, media…)</span></div>` : ""}</div>`;
     return `<section class="svc"><h2>Home Assistant services</h2>
       <p class="sub">Estimated data demand per integration (${key === "day" ? "per day" : "per month"})</p>${cmp}
       <div class="scroll"><table><thead><tr><th>Integration</th><th>Method</th><th class="n">Polls / day</th><th class="n">${key === "day" ? "Day" : "Month"}</th></tr></thead><tbody>

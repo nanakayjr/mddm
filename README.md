@@ -39,6 +39,16 @@ Per tracked device: `<Today|This month|This year> RX / TX / total` (MB, `total` 
 `last_reset` set, so they work in the Energy-style statistics and long-term graphs).
 Plus *Network …* totals, *Top consumer …* rankings and *Home Assistant services estimate*.
 
+## Add-ons (apps): measured, not estimated
+On Home Assistant OS / Supervised, the Supervisor reports cumulative network RX/TX bytes for each
+add-on container. The integration samples them every minute and builds daily/monthly/yearly totals
+(restarts and updates, which reset the counters, are handled). You get a ranking in the dashboard
+and `Top add-on today/this month/this year` sensors (full ranking in the attributes).
+* Counters include LAN and internet traffic of the container (also its chatter with Home Assistant).
+* Add-ons with `host_network: true` report whole-host counters, so they are listed as "not ranked"
+  instead of being attributed wrongly.
+* Not available on Container/Core installs (no Supervisor); the section is simply hidden.
+
 ## Service estimates – what is real and what is not
 Home Assistant has no per-integration byte counters. Each integration is labelled:
 

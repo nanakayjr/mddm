@@ -17,6 +17,7 @@ from homeassistant.util import dt as dt_util
 
 from .const import (CONF_DEVICES, CONF_ESTIMATE, CONF_HA_HOST, CONF_PERIODS, CONF_SWAP,
                     DOMAIN, ESTIMATE_REFRESH_S, PERIODS, SCAN_SECONDS)
+from .addons import AddonTracker, supervisor_available
 from .engine import Engine, classify_unit
 from .estimator import estimate_services
 
@@ -52,6 +53,10 @@ class UsageCoordinator(DataUpdateCoordinator[None]):
         self._est_rows: list[dict[str, Any]] = []
         self._est_ts = 0.0
         self._warned: set[str] = set()
+        self.addon_engine = Engine()
+        self._addon_store: Store = Store(hass, 1, f"{DOMAIN}.{entry.entry_id}.addons")
+        self.addons: AddonTracker | None = None
+        self._addon_ts = 0.0
 
     # ------------------------------------------------------------------ lifecycle
     async def async_setup(self) -> None:
@@ -62,6 +67,9 @@ class UsageCoordinator(DataUpdateCoordinator[None]):
         if entity_ids:
             self.config_entry.async_on_unload(
                 async_track_state_change_event(self.hass, entity_ids, self._on_event))
+        if supervisor_available():
+            self.addon_engine = Engine(await self._addon_store.async_load())
+            self.addons = AddonTracker(self.hass, self.addon_engine)
         self._sample()
 
     @callback
@@ -71,6 +79,18 @@ class UsageCoordinator(DataUpdateCoordinator[None]):
     async def _async_update_data(self) -> None:
         self._sample()
         self._store.async_delay_save(self.engine.to_dict, SCAN_SECONDS // 2)
+        if self.addons is not None and time.monotonic() - self._addon_ts >= 55:
+            self._addon_ts = time.monotonic()
+            await self.addons.async_update(dt_util.now())
+            self._addon_store.async_delay_save(self.addon_engine.to_dict, SCAN_SECONDS // 2)
+
+    async def async_save(self) -> None:
+        await self._store.async_save(self.engine.to_dict())
+        if self.addons is not None:
+            await self._addon_store.async_save(self.addon_engine.to_dict())
+
+    def addon_ranking(self, period: str) -> list[dict[str, Any]]:
+        return self.addon_engine.ranking(period, dt_util.now())
 
     # ------------------------------------------------------------------ sampling
     def _sample(self) -> None:
@@ -126,7 +146,10 @@ class UsageCoordinator(DataUpdateCoordinator[None]):
             host = {"name": self.engine.devices[self.ha_host]["name"],
                     "day": sum(self.totals(self.ha_host, "day")),
                     "month": sum(self.totals(self.ha_host, "month"))}
+        addon_day = sum(r["total"] for r in self.addon_ranking("day")) if self.addons else 0.0
+        addon_month = sum(r["total"] for r in self.addon_ranking("month")) if self.addons else 0.0
         est_day = sum(r["day"] or 0 for r in self._est_rows if r["mode"] != "measured")
         est_month = sum(r["month"] or 0 for r in self._est_rows if r["mode"] != "measured")
         return {"rows": self._est_rows, "host": host, "est_day": est_day,
-                "est_month": est_month, "as_of": now.isoformat()}
+                "est_month": est_month, "addon_day": addon_day,
+                "addon_month": addon_month, "as_of": now.isoformat()}

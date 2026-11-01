@@ -15,7 +15,7 @@ from homeassistant.util import dt as dt_util
 from .const import DOMAIN, PERIOD_LABEL
 from .coordinator import UsageConfigEntry, UsageCoordinator, period_start
 
-_UNREC = frozenset({"items", "mu_kind", "mu_entry", "rows", "note"})
+_UNREC = frozenset({"items", "mu_kind", "mu_entry", "rows", "note", "excluded"})
 _PERIOD_ICON = {"day": "mdi:calendar-today", "month": "mdi:calendar-month", "year": "mdi:calendar"}
 
 
@@ -34,6 +34,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: UsageConfigEntry,
     for p in c.periods:
         ents.append(NetworkTotalSensor(c, p))
         ents.append(RankingSensor(c, p))
+    if c.addons is not None:
+        ents += [AddonRankingSensor(c, p) for p in c.periods]
     if c.estimate_enabled:
         ents.append(ServicesSensor(c))
     async_add_entities(ents)
@@ -139,6 +141,27 @@ class RankingSensor(_Base):
                 "items": self.coordinator.ranking(self._period)}
 
 
+class AddonRankingSensor(RankingSensor):
+    """Measured network usage per Home Assistant add-on (app), from Supervisor stats."""
+
+    def __init__(self, c: UsageCoordinator, period: str) -> None:
+        super().__init__(c, period)
+        self._attr_unique_id = f"{self._entry_id}_addons_{period}"
+        self._attr_name = f"Top add-on {PERIOD_LABEL[period].lower()}"
+        self._attr_icon = "mdi:puzzle"
+
+    @property
+    def native_value(self) -> str | None:
+        rows = self.coordinator.addon_ranking(self._period)
+        return rows[0]["name"] if rows and rows[0]["total"] > 0 else None
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        return {"mu_kind": "addons", "mu_entry": self._entry_id, "period": self._period,
+                "items": self.coordinator.addon_ranking(self._period),
+                "excluded": self.coordinator.addons.excluded if self.coordinator.addons else []}
+
+
 class ServicesSensor(_Base):
     _attr_state_class = SensorStateClass.MEASUREMENT
 
@@ -157,6 +180,7 @@ class ServicesSensor(_Base):
     def extra_state_attributes(self) -> dict[str, Any]:
         s = self.coordinator.services()
         return {"mu_kind": "services", "mu_entry": self._entry_id, "rows": s["rows"],
-                "host": s["host"], "est_day": s["est_day"], "est_month": s["est_month"],
+                "host": s["host"], "addon_day": s["addon_day"],
+                "addon_month": s["addon_month"], "est_day": s["est_day"], "est_month": s["est_month"],
                 "note": "Estimates: integrations pointing at tracked LAN devices are measured; "
                         "cloud integrations are polls/day x typical payload."}

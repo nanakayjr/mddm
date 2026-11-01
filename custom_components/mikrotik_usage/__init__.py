@@ -70,7 +70,7 @@ async def _reload(hass: HomeAssistant, entry: UsageConfigEntry) -> None:
 async def async_unload_entry(hass: HomeAssistant, entry: UsageConfigEntry) -> bool:
     ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     if ok:
-        await entry.runtime_data._store.async_save(entry.runtime_data.engine.to_dict())
+        await entry.runtime_data.async_save()
         others = [e for e in hass.config_entries.async_entries(DOMAIN)
                   if e.entry_id != entry.entry_id]
         if not others and hass.data.pop(_PANEL_FLAG, None):
