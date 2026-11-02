@@ -18,10 +18,11 @@ from homeassistant.util import dt as dt_util
 from .const import (CONF_DEVICES, CONF_ESTIMATE, CONF_HA_HOST, CONF_PERIODS, CONF_SWAP,
                     DOMAIN, ESTIMATE_REFRESH_S, PERIODS, SCAN_SECONDS)
 from .addons import AddonTracker, supervisor_available
-from .engine import Engine, classify_unit
+from .engine import Engine, attribute_wan, classify_unit
 from .estimator import async_estimate_services
 
 _LOGGER = logging.getLogger(__name__)
+ADDON_SCHEMA = 2
 
 type UsageConfigEntry = ConfigEntry["UsageCoordinator"]
 
@@ -68,7 +69,9 @@ class UsageCoordinator(DataUpdateCoordinator[None]):
             self.config_entry.async_on_unload(
                 async_track_state_change_event(self.hass, entity_ids, self._on_event))
         if supervisor_available():
-            self.addon_engine = Engine(await self._addon_store.async_load())
+            saved = await self._addon_store.async_load()
+            # Totals saved before schema 2 counted all bridge traffic as internet usage.
+            self.addon_engine = Engine(saved if saved and saved.get("schema") == ADDON_SCHEMA else None)
             self.addons = AddonTracker(self.hass, self.addon_engine)
         self._sample()
 
@@ -87,15 +90,26 @@ class UsageCoordinator(DataUpdateCoordinator[None]):
         if self.addons is not None and time.monotonic() - self._addon_ts >= 55:
             self._addon_ts = time.monotonic()
             await self.addons.async_update(dt_util.now())
-            self._addon_store.async_delay_save(self.addon_engine.to_dict, SCAN_SECONDS // 2)
+            self._addon_store.async_delay_save(self._addon_data, SCAN_SECONDS // 2)
 
     async def async_save(self) -> None:
         await self._store.async_save(self.engine.to_dict())
         if self.addons is not None:
-            await self._addon_store.async_save(self.addon_engine.to_dict())
+            await self._addon_store.async_save(self._addon_data())
+
+    def _addon_data(self) -> dict[str, Any]:
+        return {**self.addon_engine.to_dict(), "schema": ADDON_SCHEMA}
 
     def addon_ranking(self, period: str) -> list[dict[str, Any]]:
-        return self.addon_engine.ranking(period, dt_util.now())
+        """Add-on WAN usage (plus internal bridge traffic) and the derived Home Assistant Core row.
+
+        Core runs on the host network, so it has no usable container counters: it gets
+        what the router measured for the HA host that the add-ons do not explain.
+        """
+        host = None
+        if self.ha_host and self.ha_host in self.engine.devices:
+            host = self.totals(self.ha_host, period)
+        return attribute_wan(self.addon_engine.ranking(period, dt_util.now()), host)
 
     # ------------------------------------------------------------------ sampling
     def _sample(self) -> None:
@@ -144,8 +158,9 @@ class UsageCoordinator(DataUpdateCoordinator[None]):
             host = {"name": self.engine.devices[self.ha_host]["name"],
                     "day": sum(self.totals(self.ha_host, "day")),
                     "month": sum(self.totals(self.ha_host, "month"))}
-        addon_day = sum(r["total"] for r in self.addon_ranking("day")) if self.addons else 0.0
-        addon_month = sum(r["total"] for r in self.addon_ranking("month")) if self.addons else 0.0
+        addon_day, addon_month = (
+            (sum(r["total"] for r in self.addon_ranking(p) if not r.get("derived"))
+             for p in ("day", "month")) if self.addons else (0.0, 0.0))
         internet = [r for r in self._est_rows if r["scope"] == "internet" and r["mode"] != "measured"]
         est_day = sum(r["day"] or 0 for r in internet)
         est_month = sum(r["month"] or 0 for r in internet)

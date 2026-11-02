@@ -142,7 +142,7 @@ class RankingSensor(_Base):
 
 
 class AddonRankingSensor(RankingSensor):
-    """Measured network usage per Home Assistant add-on (app), from Supervisor stats."""
+    """Internet (WAN) usage per add-on (app) from Supervisor stats, plus internal bridge traffic."""
 
     def __init__(self, c: UsageCoordinator, period: str) -> None:
         super().__init__(c, period)
@@ -152,13 +152,16 @@ class AddonRankingSensor(RankingSensor):
 
     @property
     def native_value(self) -> str | None:
-        rows = self.coordinator.addon_ranking(self._period)
+        rows = [r for r in self.coordinator.addon_ranking(self._period) if not r.get("derived")]
         return rows[0]["name"] if rows and rows[0]["total"] > 0 else None
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
+        items = self.coordinator.addon_ranking(self._period)
         return {"mu_kind": "addons", "mu_entry": self._entry_id, "period": self._period,
-                "items": self.coordinator.addon_ranking(self._period),
+                "items": items,
+                "wan_total": sum(r["total"] for r in items),
+                "internal_total": sum(r["internal_total"] for r in items),
                 "excluded": self.coordinator.addons.excluded if self.coordinator.addons else []}
 
 

@@ -1,6 +1,13 @@
 /* Mikrotik Data Usage – dashboard panel (vanilla web component, no dependencies). */
 const RX = "#2f7fc1", TX = "#e39a3b";
 const PERIODS = { day: "Today", month: "This month", year: "This year" };
+const VIEWS = { wan: "Internet (WAN)", local: "Local Container Traffic", all: "All" };
+const PROFILES = {
+  local_ipc_and_ingress_only: "Local only",
+  wan_egress_backup: "Backup",
+  wan_tunnel_proxy: "Tunnel / proxy",
+  standard_wan_capable: "Internet capable",
+};
 const MODES = {
   measured:  ["Measured", "Real router counters of the LAN device this integration talks to"],
   estimated: ["Estimated", "Cloud integration: polls per day x typical payload"],
@@ -69,6 +76,8 @@ td{padding:8px;border-bottom:1px solid var(--line);font-variant-numeric:tabular-
 th.n,td.n{text-align:right}
 .tag{font-size:12px;padding:2px 9px;border-radius:999px;background:var(--secondary-background-color);color:var(--mute);white-space:nowrap}
 .tag.measured{background:color-mix(in srgb,var(--rx) 18%,transparent);color:var(--primary-text-color)}
+.views{display:inline-flex;margin:0 0 14px}
+.views .tab{padding:5px 14px;font-size:13px}
 .chk{display:flex;gap:8px;align-items:center;font-size:13px;color:var(--mute);margin:0 0 12px;cursor:pointer}
 .scroll{overflow-x:auto}.note{color:var(--mute);font-size:12.5px;margin:14px 0 0;max-width:70ch}
 .empty{padding:40px 12px;text-align:center;color:var(--mute)}
@@ -78,12 +87,13 @@ class MikrotikUsagePanel extends HTMLElement {
   constructor() {
     super();
     this.attachShadow({ mode: "open" });
-    this._period = null; this._sel = null; this._lan = false; this._hist = null; this._histKey = ""; this._histTs = 0; this._raf = 0;
+    this._period = null; this._sel = null; this._lan = false; this._view = "wan"; this._hist = null; this._histKey = ""; this._histTs = 0; this._raf = 0;
     this.shadowRoot.innerHTML = `<style>${CSS}</style><div id="app"></div>`;
     this.shadowRoot.addEventListener("click", (e) => {
       if (e.target.id === "lan") { this._lan = e.target.checked; this._render(); return; }
-      const t = e.target.closest("[data-period],[data-key],.menu"); if (!t) return;
+      const t = e.target.closest("[data-period],[data-key],[data-view],.menu"); if (!t) return;
       if (t.classList.contains("menu")) this.dispatchEvent(new Event("hass-toggle-menu", { bubbles: true, composed: true }));
+      else if (t.dataset.view) { this._view = t.dataset.view; this._render(); }
       else if (t.dataset.period) { this._period = t.dataset.period; this._render(); }
       else { this._sel = this._sel === t.dataset.key ? null : t.dataset.key; this._render(); }
     });
@@ -172,15 +182,43 @@ class MikrotikUsagePanel extends HTMLElement {
       <div class="val">${fmt(i.total)}<div class="pct">${i.share}%</div></div></div>`).join("");
   }
 
+  // Map add-on rows to the selected traffic view: internet (WAN), internal Docker bridge, or both.
+  _addonItems(items) {
+    const v = this._view;
+    const rows = items.map((i) => {
+      const irx = i.internal_bridge_rx || 0, itx = i.internal_bridge_tx || 0;
+      const rx = v === "wan" ? i.rx : v === "local" ? irx : i.rx + irx;
+      const tx = v === "wan" ? i.tx : v === "local" ? itx : i.tx + itx;
+      return { ...i, rx, tx, total: rx + tx };
+    }).filter((i) => i.total > 0 || (v !== "local" && i.derived));
+    rows.sort((x, y) => y.total - x.total);
+    const grand = rows.reduce((s, i) => s + i.total, 0) || 1;
+    rows.forEach((i) => { i.share = Math.round((i.total / grand) * 1000) / 10; });
+    return rows;
+  }
+
   _addons(a, p) {
     if (!a) return "";
-    const items = (a.items || []).filter((i) => i.total > 0);
+    const items = this._addonItems(a.items || []);
     const maxSide = Math.max(1, ...items.map((i) => Math.max(i.rx, i.tx)));
     const ex = a.excluded || [];
+    const v = this._view;
+    const sub = {
+      wan: "measured internet usage: local Docker-bridge chatter is not counted; Home Assistant Core is what the router saw for the HA host beyond the add-ons",
+      local: "traffic that stayed on the internal Docker bridge (e.g. Home Assistant Core &rarr; InfluxDB, Ingress streams); never counted as internet usage",
+      all: "internet usage plus internal Docker-bridge traffic per container",
+    }[v];
+    const views = `<div class="tabs views" role="group" aria-label="Traffic type">${Object.keys(VIEWS).map((x) =>
+      `<button class="tab" data-view="${x}" aria-pressed="${x === v}">${VIEWS[x]}</button>`).join("")}</div>`;
+    const rows = items.map((i) => {
+      const tag = i.derived ? "derived from router total" : PROFILES[i.profile];
+      return this._rows([i], maxSide, false).replace(`<div class="name">${esc(i.name)}</div>`,
+        `<div class="name" title="${esc(i.name)}">${esc(i.name)}${tag ? `<div class="pct">${esc(tag)}</div>` : ""}</div>`);
+    }).join("");
     return `<section class="rank"><h2>Add-ons (apps) by usage</h2>
-      <p class="sub">${PERIODS[p]} &middot; measured from each add-on container's network counters (LAN and internet)</p>
-      ${items.length ? `<div class="axis"><div></div><div><span style="color:${RX}">&larr; RX</span><span style="color:${TX}">TX &rarr;</span></div><div></div></div>${this._rows(items, maxSide, false)}`
-        : `<div class="empty">No add-on traffic recorded yet for this period.</div>`}
+      <p class="sub">${PERIODS[p]} &middot; ${sub}</p>${views}
+      ${items.length ? `<div class="axis"><div></div><div><span style="color:${RX}">&larr; RX</span><span style="color:${TX}">TX &rarr;</span></div><div></div></div>${rows}`
+        : `<div class="empty">No ${v === "local" ? "local container" : "add-on"} traffic recorded yet for this period.</div>`}
       ${ex.length ? `<p class="note">Not ranked, because they use the host network and report whole-host counters: ${ex.map(esc).join(", ")}.</p>` : ""}
     </section>`;
   }
@@ -219,8 +257,8 @@ class MikrotikUsagePanel extends HTMLElement {
     const cmp = `<div class="cmp">
       <div><b>${fmt(est)}</b><span>estimated for internet integrations ${label}</span></div>
       ${host ? `<div><b>${fmt(hostV)}</b><span>measured for ${esc(host.name)}</span></div>
-      <div><b>${fmt(addon)}</b><span>add-ons (measured)</span></div>
-      <div><b>${fmt(Math.max(0, hostV - est - addon))}</b><span>everything else (updates, backups, media…)</span></div>` : ""}</div>`;
+      <div><b>${fmt(addon)}</b><span>add-ons (internet, measured)</span></div>
+      <div><b>${fmt(Math.max(0, hostV - est - addon))}</b><span>Home Assistant Core &amp; Supervisor (updates, cloud, media…)</span></div>` : ""}</div>`;
     return `<section class="svc"><h2>Home Assistant integrations</h2>
       <p class="sub">Estimated data demand per integration (${key === "day" ? "per day" : "per month"}). Internet-facing integrations only by default.</p>${cmp}
       ${nLan ? `<label class="chk"><input type="checkbox" id="lan" ${this._lan ? "checked" : ""}> Also show ${nLan} local-network integration${nLan > 1 ? "s" : ""} (traffic stays inside your network)</label>` : ""}

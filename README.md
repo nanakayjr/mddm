@@ -39,14 +39,31 @@ Per tracked device: `<Today|This month|This year> RX / TX / total` (MB, `total` 
 `last_reset` set, so they work in the Energy-style statistics and long-term graphs).
 Plus *Network …* totals, *Top consumer …* rankings and *Home Assistant services estimate*.
 
-## Add-ons (apps): measured, not estimated
+## Add-ons (apps): internet usage vs. local container traffic
 On Home Assistant OS / Supervised, the Supervisor reports cumulative network RX/TX bytes for each
-add-on container. The integration samples them every minute and builds daily/monthly/yearly totals
-(restarts and updates, which reset the counters, are handled). You get a ranking in the dashboard
-and `Top add-on today/this month/this year` sensors (full ranking in the attributes).
-* Counters include LAN and internet traffic of the container (also its chatter with Home Assistant).
+add-on container. These counters cover everything crossing the container's virtual interface on the
+internal `hassio` bridge (`172.30.32.0/23`), **not** only internet traffic, so they are never used as
+internet (WAN) usage directly. The integration samples them every minute, classifies each add-on
+(slug first, then `/addons/{slug}/info`: `ingress`, `ingress_only`, `host_network`, exposed ports) and
+splits every delta into real WAN bytes and internal bridge bytes:
+
+| Profile | WAN usage | Internal bridge |
+|---|---|---|
+| Local only (File editor, InfluxDB, Mosquitto, Grafana, SSH, VS Code, Zigbee2MQTT?) | 0 B | all RX/TX |
+| Backup (Google Drive Backup?) | TX + ~4 % of TX as RX (ACKs) | the rest of RX (snapshot pulled from the Supervisor) |
+| Tunnel / proxy (Cloudflared, Tailscale, WireGuard, Nginx proxy) | 50 % of RX/TX | other 50 % (hop to Home Assistant Core) |
+| Internet capable (everything else) | all RX/TX | ? |
+
+Slug lists and factors are in `const.py`. Home Assistant Core runs on the host network and has no
+container counters, so it is listed as its own consumer: what your router measured for the HA host
+(choose it in the settings) minus the add-ons' WAN usage, i.e. cloud integrations, HACS, streams,
+voice and Supervisor/OS updates. Add-on WAN is capped at the router total.
+
+The dashboard shows `[ Internet (WAN) | Local Container Traffic | All ]` (default: Internet), and the
+`Top add-on ?` sensors carry both metrics in their attributes.
 * Add-ons with `host_network: true` report whole-host counters, so they are listed as "not ranked"
   instead of being attributed wrongly.
+* Add-on totals recorded by earlier versions (raw RX+TX counted as internet) are discarded on upgrade.
 * Not available on Container/Core installs (no Supervisor); the section is simply hidden.
 
 ## Service estimates – what is real and what is not

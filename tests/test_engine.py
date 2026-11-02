@@ -1,9 +1,12 @@
-import importlib.util, pathlib
+import importlib, pathlib, sys, types
 from datetime import datetime, timedelta, timezone
 
-spec = importlib.util.spec_from_file_location(
-    "engine", pathlib.Path(__file__).parents[1] / "custom_components/mikrotik_usage/engine.py")
-engine = importlib.util.module_from_spec(spec); spec.loader.exec_module(engine)
+# Import engine/const as a submodule without running the package __init__ (needs Home Assistant).
+_pkg_dir = pathlib.Path(__file__).parents[1] / "custom_components/mikrotik_usage"
+_pkg = types.ModuleType("mikrotik_usage"); _pkg.__path__ = [str(_pkg_dir)]
+sys.modules["mikrotik_usage"] = _pkg
+engine = importlib.import_module("mikrotik_usage.engine")
+const = importlib.import_module("mikrotik_usage.const")
 E = engine.Engine
 T0 = datetime(2026, 10, 31, 22, 0, tzinfo=timezone.utc)
 
@@ -69,3 +72,131 @@ def test_split_direction():
     assert s("laptop_rx_rate") == ("rx", "laptop")
     assert s("Living room TV Download") == ("rx", "Living room TV")
     assert s("Temperature") is None
+
+
+# ---------------------------------------------------------------- add-on WAN attribution
+GB = 1e9
+MB = 1e6
+
+
+def _feed(e, slug, name, rx, tx, now=T0, info=None):
+    """Mimic AddonTracker._one for one sampling interval."""
+    profile = engine.classify_addon(slug, info)
+    e.ensure(slug, name, profile)
+    for metric, nbytes in engine.split_addon_traffic(profile, rx, tx).items():
+        if nbytes:
+            e.add(slug, metric, nbytes, now)
+
+
+def test_classify_addon():
+    c = engine.classify_addon
+    for slug in ("core_configurator", "a0d7b954_influxdb", "core_mosquitto", "a0d7b954_grafana",
+                 "core_ssh", "a0d7b954_vscode", "a0d7b954_sqlite-web", "core_chrony",
+                 "45df7312_zigbee2mqtt", "a0d7b954_tasmoadmin"):
+        assert c(slug) == const.PROFILE_LOCAL, slug
+    assert c("cebe7a76_hassio_google_drive_backup") == const.PROFILE_BACKUP
+    for slug in ("9074a9ba_cloudflared", "a0d7b954_tailscale", "core_wireguard", "core_nginx_proxy"):
+        assert c(slug) == const.PROFILE_TUNNEL, slug
+    assert c("a0d7b954_firefox", {"ingress": True, "ingress_only": True}) == const.PROFILE_STANDARD
+    assert c("abcd1234_plexmediaserver") == const.PROFILE_STANDARD
+
+
+def test_classify_addon_from_metadata():
+    c = engine.classify_addon
+    assert c("abc12345_notes", {"ingress": True, "ingress_only": True, "ports": {}}) == const.PROFILE_LOCAL
+    assert c("abc12345_notes", {"ingress": True, "ingress_only": True,
+                                "ports": {"80/tcp": None}}) == const.PROFILE_LOCAL
+    assert c("abc12345_notes", {"ingress": True, "ingress_only": True,
+                                "ports": {"80/tcp": 8080}}) == const.PROFILE_STANDARD
+    assert c("abc12345_notes", {"ingress": True, "ingress_only": True,
+                                "host_network": True}) == const.PROFILE_STANDARD
+    assert c("abc12345_notes", {"ingress": False}) == const.PROFILE_STANDARD
+    assert c("abc12345_notes") == const.PROFILE_STANDARD
+
+
+def test_local_addons_have_zero_wan_and_keep_bridge_traffic():
+    e = E()
+    _feed(e, "core_configurator", "File editor", 2.70 * GB, 5 * MB)
+    _feed(e, "a0d7b954_influxdb", "InfluxDB", 441 * MB, 20 * MB)
+    for slug in ("core_configurator", "a0d7b954_influxdb"):
+        assert e.totals(slug, "month", T0) == (0, 0)
+    assert e.internal_totals("core_configurator", "month", T0) == (2.70 * GB, 5 * MB)
+    assert e.internal_totals("a0d7b954_influxdb", "day", T0) == (441 * MB, 20 * MB)
+    r = {x["key"]: x for x in e.ranking("month", T0)}
+    assert r["core_configurator"]["total"] == 0 and r["core_configurator"]["internal_total"] > 2.7 * GB
+
+
+def test_backup_discounts_local_snapshot_pull():
+    s = engine.split_addon_traffic(const.PROFILE_BACKUP, 2.65 * GB, 2.65 * GB)
+    assert s["tx"] == 2.65 * GB
+    assert s["rx"] == 2.65 * GB * const.BACKUP_ACK_OVERHEAD  # only ACK overhead counts as WAN RX
+    assert abs(s["rx"] + s["internal_bridge_rx"] - 2.65 * GB) < 1 and s["internal_bridge_tx"] == 0
+    # little RX (no snapshot pull): never more WAN RX than was received
+    assert engine.split_addon_traffic(const.PROFILE_BACKUP, 1e3, 1e9)["rx"] == 1e3
+
+
+def test_tunnel_does_not_double_count():
+    s = engine.split_addon_traffic(const.PROFILE_TUNNEL, 600 * MB, 400 * MB)
+    assert (s["rx"], s["tx"]) == (300 * MB, 200 * MB)
+    assert (s["internal_bridge_rx"], s["internal_bridge_tx"]) == (300 * MB, 200 * MB)
+    s = engine.split_addon_traffic(const.PROFILE_STANDARD, 7, 9)
+    assert (s["rx"], s["tx"], s["internal_bridge_rx"], s["internal_bridge_tx"]) == (7, 9, 0, 0)
+
+
+def _wan_scenario(local_rx):
+    e = E()
+    _feed(e, "core_configurator", "File editor", local_rx, 0)
+    _feed(e, "a0d7b954_influxdb", "InfluxDB", local_rx / 6, 0)
+    _feed(e, "cebe7a76_hassio_google_drive_backup", "Google Drive Backup", 2.65 * GB, 2.65 * GB)
+    _feed(e, "9074a9ba_cloudflared", "Cloudflared", 100 * MB, 100 * MB)
+    return engine.attribute_wan(e.ranking("day", T0), (10 * GB, 4 * GB))
+
+
+def test_local_chatter_does_not_skew_wan_attribution():
+    quiet, noisy = _wan_scenario(0), _wan_scenario(50 * GB)
+    for rows in (quiet, noisy):
+        by = {r["key"]: r for r in rows}
+        assert by["core_configurator"]["total"] == 0 and by["a0d7b954_influxdb"]["total"] == 0
+    # Google Drive Backup and Cloudflared get identical WAN numbers regardless of local noise.
+    for key in ("cebe7a76_hassio_google_drive_backup", "9074a9ba_cloudflared"):
+        q = next(r for r in quiet if r["key"] == key); n = next(r for r in noisy if r["key"] == key)
+        assert (q["rx"], q["tx"], q["share"]) == (n["rx"], n["tx"], n["share"])
+    by = {r["key"]: r for r in noisy}
+    assert by["cebe7a76_hassio_google_drive_backup"]["tx"] == 2.65 * GB
+    assert by["9074a9ba_cloudflared"]["rx"] == 50 * MB and by["9074a9ba_cloudflared"]["tx"] == 50 * MB
+    assert by["core_configurator"]["internal_total"] == 50 * GB
+
+
+def test_remainder_goes_to_core_and_totals_match_router():
+    rows = _wan_scenario(5 * GB)
+    core = next(r for r in rows if r["key"] == const.CORE_KEY)
+    assert core["derived"] and core["name"] == const.CORE_NAME
+    addons_rx = sum(r["rx"] for r in rows if r["key"] != const.CORE_KEY)
+    addons_tx = sum(r["tx"] for r in rows if r["key"] != const.CORE_KEY)
+    assert abs(core["rx"] + addons_rx - 10 * GB) < 1 and abs(core["tx"] + addons_tx - 4 * GB) < 1
+    assert core["rx"] > 0 and core["tx"] > 0
+    assert rows[0]["key"] == const.CORE_KEY  # largest WAN consumer
+
+
+def test_addon_wan_is_capped_by_router_total_and_core_without_host():
+    e = E()
+    _feed(e, "cebe7a76_hassio_google_drive_backup", "Google Drive Backup", 0, 3 * GB)
+    _feed(e, "a0d7b954_firefox", "Firefox", 0, 1 * GB)
+    rows = engine.attribute_wan(e.ranking("day", T0), (0, 2 * GB))
+    by = {r["key"]: r for r in rows}
+    assert abs(by["cebe7a76_hassio_google_drive_backup"]["tx"] - 1.5 * GB) < 1  # 3:1 weights
+    assert abs(by["a0d7b954_firefox"]["tx"] - 0.5 * GB) < 1
+    assert by[const.CORE_KEY]["tx"] == 0 and by["a0d7b954_firefox"]["scaled"]
+    unknown = engine.attribute_wan(e.ranking("day", T0), None)
+    core = next(r for r in unknown if r["key"] == const.CORE_KEY)
+    assert core["total"] == 0 and core["host_known"] is False
+    assert next(r for r in unknown if r["key"] == "a0d7b954_firefox")["tx"] == 1 * GB
+
+
+def test_legacy_period_data_without_internal_metrics():
+    e = E({"devices": {"a": {"name": "A", "history": {}, "day": {"key": "2026-10-31", "rx": 5.0, "tx": 1.0},
+                              "month": {"key": "2026-10", "rx": 5.0, "tx": 1.0},
+                              "year": {"key": "2026", "rx": 5.0, "tx": 1.0}}}})
+    assert e.internal_totals("a", "day", T0) == (0.0, 0.0)
+    e.add("a", "internal_bridge_rx", 7, T0)
+    assert e.internal_totals("a", "year", T0) == (7, 0.0) and e.totals("a", "year", T0) == (5, 1)
